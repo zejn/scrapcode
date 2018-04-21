@@ -5,9 +5,11 @@ fs_setup()
 	MOUNTOPTS="${3:-}"
 
 	export PATH=/sbin:/usr/sbin:$PATH
-	if ! which mkfs.$FSTYPE; then
-		echo "Cannot find mkfs.$FSTYPE"
-		exit 1
+	if [ "$FSTYPE" != "zfs" ]; then
+		if ! which mkfs.$FSTYPE; then
+			echo "Cannot find mkfs.$FSTYPE"
+			exit 1
+		fi
 	fi
 
 	mkdir -p /tmp /mnt/tmp
@@ -33,7 +35,7 @@ fs_setup()
 	BLOCKS_KB=2
 	BLOCKS_MB=$((1024*2))
 	# Total looback dev size to allocate
-	TOTSZ=$((100 * $BLOCKS_MB))
+	TOTSZ=$((200 * $BLOCKS_MB))
 	# Amount of loopback device to map before bad range. Move the end of this
 	# around to make sure the error region doesn't make fs creation fail.
 	STARTSZ=$(( 58 * $BLOCKS_MB ))
@@ -74,7 +76,11 @@ __END__
 
 	dmsetup mknodes errdev1
 
-	sudo mkfs.$FSTYPE $MKFSOPTS /dev/mapper/errdev1
+	if [ "$FSTYPE" == "zfs" ]; then
+		sudo zpool create pool0 /dev/mapper/errdev1
+	else
+		sudo mkfs.$FSTYPE $MKFSOPTS /dev/mapper/errdev1
+	fi
 
 	# make a FS on it and mount it
 	mkdir -p /mnt/tmp
@@ -83,9 +89,14 @@ __END__
 	else
 		OPTSSTR="-o $MOUNTOPTS"
 	fi
-	mount /dev/mapper/errdev1 /mnt/tmp $OPTSSTR
+	if [ "$FSTYPE" == "zfs" ]; then
+		zfs set mountpoint=/mnt/tmp pool0
+		trap "{ trap EXIT; zpool destroy pool0; dmsetup remove errdev1; losetup -d ${LOOPDEV}; }" EXIT
+	else
+		mount /dev/mapper/errdev1 /mnt/tmp $OPTSSTR
+		trap "{ trap EXIT; umount /mnt/tmp; dmsetup remove errdev1; losetup -d ${LOOPDEV}; }" EXIT
+	fi
 
-	trap "{ trap EXIT; umount /mnt/tmp; dmsetup remove errdev1; losetup -d ${LOOPDEV}; }" EXIT
 }
 
 fs_cleanup()
